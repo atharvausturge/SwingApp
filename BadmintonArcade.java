@@ -1,14 +1,53 @@
 import javax.swing.*;
+import javax.sound.sampled.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.util.Random;
+
+class Sound {
+    static void play(double freq, int ms, double volume) {
+        new Thread(() -> {
+            try {
+                float rate = 44100f;
+                int samples = (int)(rate * ms / 1000);
+                byte[] buf = new byte[samples * 2];
+                for (int i = 0; i < samples; i++) {
+                    double t = i / rate;
+                    double fadeIn = Math.min(1, i / (rate * 0.005));
+                    double fadeOut = Math.min(1, (samples - i) / (rate * 0.02));
+                    double env = Math.min(fadeIn, fadeOut);
+                    short v = (short)(Math.sin(2 * Math.PI * freq * t) * 32767 * volume * env);
+                    buf[i*2] = (byte)(v & 0xff);
+                    buf[i*2+1] = (byte)((v >> 8) & 0xff);
+                }
+                AudioFormat fmt = new AudioFormat(rate, 16, 1, true, false);
+                SourceDataLine line = AudioSystem.getSourceDataLine(fmt);
+                line.open(fmt);
+                line.start();
+                line.write(buf, 0, buf.length);
+                line.drain();
+                line.close();
+            } catch (Exception ignored) {}
+        }, "tone").start();
+    }
+    static void sequence(double[] freqs, int msEach, double volume) {
+        new Thread(() -> {
+            for (double f : freqs) {
+                play(f, msEach, volume);
+                try { Thread.sleep(msEach); } catch (InterruptedException ignored) {}
+            }
+        }, "seq").start();
+    }
+}
 
 public class BadmintonArcade extends JPanel implements ActionListener, KeyListener {
 
     static final int W = 1100, H = 600;
     static final int GROUND_Y = 510;
     static final int NET_X = W / 2;
-    static final int NET_TOP = 300;
+    static final int NET_TOP = 370; // shorter net (was 300)
+    static final int COURT_LEFT = 120;
+    static final int COURT_RIGHT = W - 120;
     static final int WIN_SCORE = 7;
 
     enum State { MENU, PLAYING, POINT, GAME_OVER }
@@ -22,10 +61,12 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
     boolean p1Swing = false, p2Swing = false;
     int p1SwingT = 0, p2SwingT = 0;
     boolean p1Smash = false, p2Smash = false;
+    boolean p1Drop = false, p2Drop = false;
 
     // Shuttle
     double sx, sy, svx, svy;
     boolean shuttleLive = false;
+    int lastHitter = 0; // 0 = none/serve, 1 or 2 — prevents double hits
 
     int score1 = 0, score2 = 0;
     int server = 1; // who serves next
@@ -50,6 +91,7 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
     void resetServe(int who) {
         server = who;
         shuttleLive = false;
+        lastHitter = 0;
         p1x = 250; p2x = 850;
         p1y = p2y = GROUND_Y;
         p1vy = p2vy = 0;
@@ -64,8 +106,10 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
     void serve(int who) {
         if (shuttleLive) return;
         shuttleLive = true;
+        lastHitter = who;
         if (who == 1) { svx = 6.2; svy = -9; }
         else { svx = -6.2; svy = -9; }
+        Sound.play(550, 40, 0.2);
     }
 
     @Override
@@ -83,24 +127,28 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
     }
 
     void updateGame() {
-        // Player 1 controls: A/D move, W jump, S swing, E smash, SPACE serve
+        // P1: A/D move, W jump, S swing, E smash, Q drop, SPACE serve
         double speed = 5.0;
+        boolean p1Busy = p1Swing || p1Smash || p1Drop;
+        boolean p2Busy = p2Swing || p2Smash || p2Drop;
         if (keys[KeyEvent.VK_A]) p1x -= speed;
         if (keys[KeyEvent.VK_D]) p1x += speed;
         if (keys[KeyEvent.VK_W] && p1y >= GROUND_Y) p1vy = -13;
-        if (keys[KeyEvent.VK_S] && !p1Swing && !p1Smash) { p1Swing = true; p1SwingT = 10; }
-        if (keys[KeyEvent.VK_E] && !p1Smash && !p1Swing) { p1Smash = true; p1SwingT = 10; }
+        if (keys[KeyEvent.VK_S] && !p1Busy) { p1Swing = true; p1SwingT = 10; }
+        if (keys[KeyEvent.VK_E] && !p1Busy) { p1Smash = true; p1SwingT = 10; }
+        if (keys[KeyEvent.VK_Q] && !p1Busy) { p1Drop  = true; p1SwingT = 10; }
         if (keys[KeyEvent.VK_SPACE] && !shuttleLive && server == 1) serve(1);
 
-        // Player 2 / Bot — controls: ←/→ move, ↑ jump, ↓ swing, RSHIFT smash, ENTER serve
+        // P2: ←/→ move, ↑ jump, ↓ swing, RSHIFT smash, / drop, ENTER serve
         if (botMode) {
             updateBot();
         } else {
             if (keys[KeyEvent.VK_LEFT]) p2x -= speed;
             if (keys[KeyEvent.VK_RIGHT]) p2x += speed;
             if (keys[KeyEvent.VK_UP] && p2y >= GROUND_Y) p2vy = -13;
-            if (keys[KeyEvent.VK_DOWN] && !p2Swing && !p2Smash) { p2Swing = true; p2SwingT = 10; }
-            if (keys[KeyEvent.VK_SHIFT] && !p2Smash && !p2Swing) { p2Smash = true; p2SwingT = 10; }
+            if (keys[KeyEvent.VK_DOWN]  && !p2Busy) { p2Swing = true; p2SwingT = 10; }
+            if (keys[KeyEvent.VK_SHIFT] && !p2Busy) { p2Smash = true; p2SwingT = 10; }
+            if (keys[KeyEvent.VK_SLASH] && !p2Busy) { p2Drop  = true; p2SwingT = 10; }
             if (keys[KeyEvent.VK_ENTER] && !shuttleLive && server == 2) serve(2);
         }
 
@@ -114,8 +162,8 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         p1x = clamp(p1x, 30, NET_X - 30);
         p2x = clamp(p2x, NET_X + 30, W - 30);
 
-        if (p1SwingT > 0) p1SwingT--; else { p1Swing = false; p1Smash = false; }
-        if (p2SwingT > 0) p2SwingT--; else { p2Swing = false; p2Smash = false; }
+        if (p1SwingT > 0) p1SwingT--; else { p1Swing = false; p1Smash = false; p1Drop = false; }
+        if (p2SwingT > 0) p2SwingT--; else { p2Swing = false; p2Smash = false; p2Drop = false; }
 
         // Shuttle physics
         if (shuttleLive) {
@@ -127,6 +175,7 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
             if (sx > NET_X - 5 && sx < NET_X + 5 && sy > NET_TOP) {
                 if (svx > 0) sx = NET_X - 5; else sx = NET_X + 5;
                 svx = -svx * 0.4;
+                Sound.play(170, 60, 0.3);
             }
 
             // Wall bounce (sides)
@@ -134,16 +183,27 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
             if (sx > W - 10) { sx = W - 10; svx = -svx * 0.5; }
 
             // Check racket hits
-            checkHit(p1x, p1y, p1Swing, p1Smash, 1);
-            checkHit(p2x, p2y, p2Swing, p2Smash, 2);
+            checkHit(p1x, p1y, p1Swing, p1Smash, p1Drop, 1);
+            checkHit(p2x, p2y, p2Swing, p2Smash, p2Drop, 2);
 
             // Ground
             if (sy >= GROUND_Y) {
                 sy = GROUND_Y;
                 shuttleLive = false;
-                if (sx < NET_X) { score2++; pointMsg = "PLAYER 2 SCORES!"; server = 2; }
-                else { score1++; pointMsg = "PLAYER 1 SCORES!"; server = 1; }
-                if (botMode && pointMsg.contains("2")) pointMsg = "BOT SCORES!";
+                boolean oob = (sx < COURT_LEFT || sx > COURT_RIGHT);
+                int winner;
+                if (oob) {
+                    // last hitter sent it out — opponent scores
+                    winner = (lastHitter == 1) ? 2 : 1;
+                    Sound.sequence(new double[]{300, 200, 130}, 90, 0.3);
+                } else {
+                    winner = (sx < NET_X) ? 2 : 1;
+                    Sound.play(140, 110, 0.4); // thud
+                }
+                if (winner == 1) { score1++; pointMsg = "PLAYER 1 SCORES!"; server = 1; }
+                else { score2++; pointMsg = botMode ? "BOT SCORES!" : "PLAYER 2 SCORES!"; server = 2; }
+                if (oob) pointMsg = (lastHitter == 1 ? "P1" : (botMode ? "BOT" : "P2")) + " HIT OUT!";
+                Sound.sequence(new double[]{660, 880, 1100}, 70, 0.25);
                 state = State.POINT;
                 pointTimer = 90;
             }
@@ -175,10 +235,13 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         double dx = Math.abs(sx - p2x);
         if (shuttleLive && sy < 320 && dx < 80 && p2y >= GROUND_Y && sx > NET_X) p2vy = -12;
 
-        // Smash if shuttle is high above us; otherwise normal swing
-        if (shuttleLive && dx < 60 && !p2Swing && !p2Smash) {
+        // Smash if shuttle is high above us; otherwise normal swing or drop
+        boolean p2Busy = p2Swing || p2Smash || p2Drop;
+        if (shuttleLive && dx < 60 && !p2Busy && lastHitter != 2) {
             boolean highShot = sy < (p2y - 75) && sy > (p2y - 130);
+            boolean atNet = p2x < NET_X + 120;
             if (highShot) { p2Smash = true; p2SwingT = 10; }
+            else if (atNet && rng.nextInt(3) == 0) { p2Drop = true; p2SwingT = 10; }
             else if (Math.abs(sy - (p2y - 40)) < 60) { p2Swing = true; p2SwingT = 10; }
         }
 
@@ -186,34 +249,38 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         if (!shuttleLive && server == 2 && frame % 60 == 0) serve(2);
     }
 
-    void checkHit(double px, double py, boolean swing, boolean smash, int who) {
-        if (!swing && !smash) return;
+    void checkHit(double px, double py, boolean swing, boolean smash, boolean drop, int who) {
+        if (!swing && !smash && !drop) return;
+        if (who == lastHitter) return; // no double hits
         double dir = (who == 1) ? 1 : -1;
-        // Smash uses overhead racket position; swing uses side
         double rx, ry;
-        if (smash) {
-            rx = px + dir * 12;
-            ry = py - 95;
-        } else {
-            rx = px + dir * 30;
-            ry = py - 50;
-        }
+        if (smash) { rx = px + dir * 12; ry = py - 95; }
+        else if (drop) { rx = px + dir * 28; ry = py - 55; }
+        else { rx = px + dir * 30; ry = py - 50; }
+
         double d = Math.hypot(sx - rx, sy - ry);
         double radius = smash ? 55 : 45;
         if (d < radius) {
             if (smash) {
-                // Powerful downward smash — requires shuttle near/above head
                 double power = 12 + rng.nextDouble() * 2;
                 svx = dir * power;
-                svy = 4 + rng.nextDouble() * 2; // angled downward
+                svy = 4 + rng.nextDouble() * 2;
+                Sound.play(220, 90, 0.45);
+            } else if (drop) {
+                // gentle, just-over-net touch
+                svx = dir * 3.2;
+                svy = -4.5;
+                Sound.play(900, 35, 0.25);
             } else {
                 double power = 7 + rng.nextDouble() * 2;
                 svx = dir * power;
                 svy = -8 - rng.nextDouble() * 2;
                 if (who == 1 && p1vy < 0) svy -= 1;
                 if (who == 2 && p2vy < 0) svy -= 1;
+                Sound.play(480, 55, 0.35);
             }
             sx = rx + dir * 30;
+            lastHitter = who;
         }
     }
 
@@ -231,8 +298,8 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         if (state == State.MENU) { drawMenu(g); return; }
 
         drawCourt(g);
-        drawPlayer(g, (int)p1x, (int)p1y, new Color(255, 80, 80), p1Swing, p1Smash, 1);
-        drawPlayer(g, (int)p2x, (int)p2y, new Color(80, 200, 255), p2Swing, p2Smash, 2);
+        drawPlayer(g, (int)p1x, (int)p1y, new Color(255, 80, 80), p1Swing, p1Smash, p1Drop, 1);
+        drawPlayer(g, (int)p2x, (int)p2y, new Color(80, 200, 255), p2Swing, p2Smash, p2Drop, 2);
         drawShuttle(g);
         drawHUD(g);
 
@@ -272,18 +339,28 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
     }
 
     void drawCourt(Graphics2D g) {
-        // ground stripes (arcade)
-        for (int i = 0; i < 30; i++) {
+        // OOB sand
+        g.setColor(new Color(160, 130, 70));
+        g.fillRect(0, GROUND_Y, W, H - GROUND_Y);
+        for (int i = 0; i < 40; i++) {
+            int y = GROUND_Y + i * 3;
+            if (y > H) break;
+            g.setColor(i % 2 == 0 ? new Color(170, 140, 80) : new Color(150, 120, 60));
+            g.fillRect(0, y, COURT_LEFT, 3);
+            g.fillRect(COURT_RIGHT, y, W - COURT_RIGHT, 3);
+        }
+        // In-bounds court (green)
+        for (int i = 0; i < 40; i++) {
             int y = GROUND_Y + i * 3;
             if (y > H) break;
             g.setColor(i % 2 == 0 ? new Color(40, 120, 60) : new Color(30, 90, 45));
-            g.fillRect(0, y, W, 3);
+            g.fillRect(COURT_LEFT, y, COURT_RIGHT - COURT_LEFT, 3);
         }
-        g.setColor(new Color(20, 60, 30));
-        g.fillRect(0, GROUND_Y, W, H);
-        // court line
+        // court boundary lines
         g.setColor(Color.WHITE);
-        g.fillRect(40, GROUND_Y - 2, W - 80, 3);
+        g.fillRect(COURT_LEFT, GROUND_Y - 2, COURT_RIGHT - COURT_LEFT, 3);
+        g.fillRect(COURT_LEFT - 2, GROUND_Y - 2, 4, 18);
+        g.fillRect(COURT_RIGHT - 2, GROUND_Y - 2, 4, 18);
 
         // Net
         g.setColor(new Color(220, 220, 220));
@@ -299,7 +376,7 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         g.fillRect(NET_X - 2, NET_TOP, 4, GROUND_Y - NET_TOP);
     }
 
-    void drawPlayer(Graphics2D g, int x, int y, Color c, boolean swing, boolean smash, int who) {
+    void drawPlayer(Graphics2D g, int x, int y, Color c, boolean swing, boolean smash, boolean drop, int who) {
         // shadow
         g.setColor(new Color(0, 0, 0, 100));
         g.fillOval(x - 20, GROUND_Y - 6, 40, 10);
@@ -320,9 +397,12 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         int ay = y - 40;
         int rx, ry;
         if (smash) {
-            // arm raised overhead
             rx = x + dir * 12;
             ry = y - 95;
+        } else if (drop) {
+            // delicate forward poke
+            rx = ax + dir * 28;
+            ry = ay + 2;
         } else if (swing) {
             rx = ax + dir * 35;
             ry = ay - 20;
@@ -382,8 +462,8 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
 
         g.setFont(arcadeFont(12));
         g.setColor(Color.WHITE);
-        g.drawString("P1: A/D move  W jump  S swing  E smash  SPACE serve", 10, H - 20);
-        if (!botMode) g.drawString("P2: ←/→ move  ↑ jump  ↓ swing  RSHIFT smash  ENTER serve", W - 500, H - 20);
+        g.drawString("P1: A/D move  W jump  S swing  E smash  Q drop  SPACE serve", 10, H - 20);
+        if (!botMode) g.drawString("P2: ←/→ move  ↑ jump  ↓ swing  RSHIFT smash  / drop  ENTER serve", W - 560, H - 20);
         else g.drawString("VS CPU", W - 90, H - 20);
 
         if (!shuttleLive && state == State.PLAYING) {
