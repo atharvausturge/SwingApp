@@ -134,9 +134,13 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
         if (keys[KeyEvent.VK_A]) p1x -= speed;
         if (keys[KeyEvent.VK_D]) p1x += speed;
         if (keys[KeyEvent.VK_W] && p1y >= GROUND_Y) p1vy = -13;
-        if (keys[KeyEvent.VK_S] && !p1Busy) { p1Swing = true; p1SwingT = 10; }
-        if (keys[KeyEvent.VK_E] && !p1Busy) { p1Smash = true; p1SwingT = 10; }
-        if (keys[KeyEvent.VK_Q] && !p1Busy) { p1Drop  = true; p1SwingT = 10; }
+        if (keys[KeyEvent.VK_S] && !p1Busy) {
+            int kind = pickHitKind(p1x, p1y, 1);
+            if (kind == 2) p1Smash = true;
+            else if (kind == 1) p1Drop = true;
+            else p1Swing = true;
+            p1SwingT = 10;
+        }
         if (keys[KeyEvent.VK_SPACE] && !shuttleLive && server == 1) serve(1);
 
         // P2: ←/→ move, ↑ jump, ↓ swing, RSHIFT smash, / drop, ENTER serve
@@ -146,9 +150,13 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
             if (keys[KeyEvent.VK_LEFT]) p2x -= speed;
             if (keys[KeyEvent.VK_RIGHT]) p2x += speed;
             if (keys[KeyEvent.VK_UP] && p2y >= GROUND_Y) p2vy = -13;
-            if (keys[KeyEvent.VK_DOWN]  && !p2Busy) { p2Swing = true; p2SwingT = 10; }
-            if (keys[KeyEvent.VK_SHIFT] && !p2Busy) { p2Smash = true; p2SwingT = 10; }
-            if (keys[KeyEvent.VK_SLASH] && !p2Busy) { p2Drop  = true; p2SwingT = 10; }
+            if (keys[KeyEvent.VK_DOWN] && !p2Busy) {
+                int kind = pickHitKind(p2x, p2y, 2);
+                if (kind == 2) p2Smash = true;
+                else if (kind == 1) p2Drop = true;
+                else p2Swing = true;
+                p2SwingT = 10;
+            }
             if (keys[KeyEvent.VK_ENTER] && !shuttleLive && server == 2) serve(2);
         }
 
@@ -247,6 +255,14 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
 
         // Serve
         if (!shuttleLive && server == 2 && frame % 60 == 0) serve(2);
+    }
+
+    // 0 = swing, 1 = drop, 2 = smash
+    int pickHitKind(double px, double py, int who) {
+        if (py < GROUND_Y - 1) return 2; // airborne → smash
+        double distToNet = Math.abs(px - NET_X);
+        if (distToNet < 140) return 1; // near net → drop
+        return 0; // standing back → swing
     }
 
     void checkHit(double px, double py, boolean swing, boolean smash, boolean drop, int who) {
@@ -462,8 +478,8 @@ public class BadmintonArcade extends JPanel implements ActionListener, KeyListen
 
         g.setFont(arcadeFont(12));
         g.setColor(Color.WHITE);
-        g.drawString("P1: A/D move  W jump  S swing  E smash  Q drop  SPACE serve", 10, H - 20);
-        if (!botMode) g.drawString("P2: ←/→ move  ↑ jump  ↓ swing  RSHIFT smash  / drop  ENTER serve", W - 560, H - 20);
+        g.drawString("P1: A/D move  W jump  S hit (auto)  SPACE serve", 10, H - 20);
+        if (!botMode) g.drawString("P2: ←/→ move  ↑ jump  ↓ hit (auto)  ENTER serve", W - 430, H - 20);
         else g.drawString("VS CPU", W - 90, H - 20);
 
         if (!shuttleLive && state == State.PLAYING) {
